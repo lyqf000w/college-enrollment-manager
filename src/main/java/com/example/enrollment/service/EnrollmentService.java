@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -26,25 +26,24 @@ public class EnrollmentService {
             .comparing(EnrollRecord::getStudentId)
             .thenComparing(EnrollRecord::getCourseId);
 
-    private final List<EnrollRecord> records = new CopyOnWriteArrayList<>();
+    private final AtomicReference<List<EnrollRecord>> records = new AtomicReference<>(List.of());
 
     public EnrollmentService() {
         resetToSampleRecords();
     }
 
     public List<EnrollRecord> resetToSampleRecords() {
-        records.clear();
-        records.addAll(processRecords(sampleRecords()));
+        records.set(List.copyOf(processRecords(sampleRecords())));
         return getAllRecords();
     }
 
     public List<EnrollRecord> clearRecords() {
-        records.clear();
+        records.set(List.of());
         return List.of();
     }
 
     public List<EnrollRecord> getAllRecords() {
-        return sortedCopy(records);
+        return sortedCopy(records.get());
     }
 
     public PagedResult<EnrollRecord> getAllRecords(int page, int size) {
@@ -67,16 +66,20 @@ public class EnrollmentService {
             }
             inputCount++;
 
-            List<String> fields = parseCsvLine(line);
-            if (fields.size() < 3 || fields.size() > 4) {
+            CsvLine fields = parseCsvLine(line);
+            if (fields.malformed()) {
+                errors.add("第 " + (i + 1) + " 行CSV引号未闭合");
+                continue;
+            }
+            if (fields.values().size() < 3 || fields.values().size() > 4) {
                 errors.add("第 " + (i + 1) + " 行格式错误，应为：学生ID,课程ID,课程名称,课程类型");
                 continue;
             }
 
-            String studentId = fields.get(0).trim();
-            String courseId = fields.get(1).trim();
-            String courseName = fields.get(2).trim();
-            String courseType = fields.size() == 4 ? fields.get(3).trim() : "";
+            String studentId = fields.values().get(0).trim();
+            String courseId = fields.values().get(1).trim();
+            String courseName = fields.values().get(2).trim();
+            String courseType = fields.values().size() == 4 ? fields.values().get(3).trim() : "";
 
             if (studentId.isEmpty() || courseId.isEmpty() || courseName.isEmpty()) {
                 errors.add("第 " + (i + 1) + " 行存在必填字段为空");
@@ -97,10 +100,12 @@ public class EnrollmentService {
         if (inputCount == 0) {
             errors.add("CSV内容为空，请至少输入一条选课记录");
         }
+        if (parsedRecords.isEmpty()) {
+            return new ImportResult(getAllRecords(), inputCount, 0, 0, errors);
+        }
 
         List<EnrollRecord> processedRecords = processRecords(parsedRecords);
-        records.clear();
-        records.addAll(processedRecords);
+        records.set(List.copyOf(processedRecords));
 
         int duplicateCount = Math.max(0, parsedRecords.size() - processedRecords.size());
         return new ImportResult(getAllRecords(), inputCount, parsedRecords.size(), duplicateCount, errors);
@@ -112,7 +117,7 @@ public class EnrollmentService {
             return getAllRecords();
         }
 
-        return records.stream()
+        return records.get().stream()
                 .filter(record -> containsIgnoreCase(record.getStudentId(), normalizedKeyword)
                         || containsIgnoreCase(record.getCourseId(), normalizedKeyword)
                         || containsIgnoreCase(record.getCourseName(), normalizedKeyword)
@@ -187,7 +192,7 @@ public class EnrollmentService {
         );
     }
 
-    private List<String> parseCsvLine(String line) {
+    private CsvLine parseCsvLine(String line) {
         List<String> fields = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean quoted = false;
@@ -210,7 +215,10 @@ public class EnrollmentService {
         }
 
         fields.add(current.toString());
-        return fields;
+        return new CsvLine(fields, quoted);
+    }
+
+    private record CsvLine(List<String> values, boolean malformed) {
     }
 
     private boolean containsIgnoreCase(String value, String normalizedKeyword) {

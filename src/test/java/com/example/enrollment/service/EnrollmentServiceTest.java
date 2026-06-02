@@ -67,4 +67,30 @@ class EnrollmentServiceTest {
         assertThat(service.search("", 1, 2).total()).isEqualTo(5);
         assertThat(service.search("", 1, 2).totalPages()).isEqualTo(3);
     }
+
+    @Test
+    void invalidOrEmptyImportDoesNotClearExistingRecords() {
+        EnrollmentService service = new EnrollmentService();
+
+        ImportResult emptyResult = service.importFromCsv("");
+        assertThat(emptyResult.records()).hasSize(5);
+        assertThat(emptyResult.errors()).contains("CSV内容为空，请至少输入一条选课记录");
+
+        ImportResult invalidResult = service.importFromCsv("""
+                S1,C000001,Java程序设计,专业课
+                S000001,C001,数据库原理,专业课
+                """);
+        assertThat(invalidResult.records()).hasSize(5);
+        assertThat(invalidResult.errors()).hasSize(2);
+    }
+
+    @Test
+    void importReportsUnclosedCsvQuote() {
+        EnrollmentService service = new EnrollmentService();
+
+        ImportResult result = service.importFromCsv("S000001,C000001,\"Java程序设计,专业课");
+
+        assertThat(result.records()).hasSize(5);
+        assertThat(result.errors()).contains("第 1 行CSV引号未闭合");
+    }
 }
