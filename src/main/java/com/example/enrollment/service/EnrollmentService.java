@@ -11,12 +11,17 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
 public class EnrollmentService {
 
     private static final List<String> VALID_COURSE_TYPES = List.of("公共课", "专业课", "选修课");
+    private static final Pattern STUDENT_ID_PATTERN = Pattern.compile("S\\d{6}");
+    private static final Pattern COURSE_ID_PATTERN = Pattern.compile("C\\d{6}");
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
     private static final Comparator<EnrollRecord> RECORD_COMPARATOR = Comparator
             .comparing(EnrollRecord::getStudentId)
             .thenComparing(EnrollRecord::getCourseId);
@@ -33,10 +38,22 @@ public class EnrollmentService {
         return getAllRecords();
     }
 
+    public List<EnrollRecord> clearRecords() {
+        records.clear();
+        return List.of();
+    }
+
     public List<EnrollRecord> getAllRecords() {
         return sortedCopy(records);
     }
 
+    public PagedResult<EnrollRecord> getAllRecords(int page, int size) {
+        return toPage(getAllRecords(), page, size);
+    }
+
+    /**
+     * 页面导入采用覆盖策略：每次导入成功后，用本次有效数据替换内存中的全量记录。
+     */
     public ImportResult importFromCsv(String csvText) {
         List<EnrollRecord> parsedRecords = new ArrayList<>();
         List<String> errors = new ArrayList<>();
@@ -49,23 +66,36 @@ public class EnrollmentService {
                 continue;
             }
             inputCount++;
-            String[] fields = line.split(",", -1);
-            if (fields.length < 3 || fields.length > 4) {
+
+            List<String> fields = parseCsvLine(line);
+            if (fields.size() < 3 || fields.size() > 4) {
                 errors.add("第 " + (i + 1) + " 行格式错误，应为：学生ID,课程ID,课程名称,课程类型");
                 continue;
             }
 
-            String studentId = fields[0].trim();
-            String courseId = fields[1].trim();
-            String courseName = fields[2].trim();
-            String courseType = fields.length == 4 ? fields[3].trim() : "";
+            String studentId = fields.get(0).trim();
+            String courseId = fields.get(1).trim();
+            String courseName = fields.get(2).trim();
+            String courseType = fields.size() == 4 ? fields.get(3).trim() : "";
 
             if (studentId.isEmpty() || courseId.isEmpty() || courseName.isEmpty()) {
                 errors.add("第 " + (i + 1) + " 行存在必填字段为空");
                 continue;
             }
+            if (!STUDENT_ID_PATTERN.matcher(studentId).matches()) {
+                errors.add("第 " + (i + 1) + " 行学生ID格式错误，应为 S+6位数字");
+                continue;
+            }
+            if (!COURSE_ID_PATTERN.matcher(courseId).matches()) {
+                errors.add("第 " + (i + 1) + " 行课程ID格式错误，应为 C+6位数字");
+                continue;
+            }
 
             parsedRecords.add(new EnrollRecord(studentId, courseId, courseName, normalizeCourseType(courseName, courseType)));
+        }
+
+        if (inputCount == 0) {
+            errors.add("CSV内容为空，请至少输入一条选课记录");
         }
 
         List<EnrollRecord> processedRecords = processRecords(parsedRecords);
@@ -89,6 +119,10 @@ public class EnrollmentService {
                         || containsIgnoreCase(record.getCourseType(), normalizedKeyword))
                 .sorted(RECORD_COMPARATOR)
                 .collect(Collectors.toList());
+    }
+
+    public PagedResult<EnrollRecord> search(String keyword, int page, int size) {
+        return toPage(search(keyword), page, size);
     }
 
     public Map<String, List<EnrollRecord>> groupByCourseType(List<EnrollRecord> sourceRecords) {
@@ -138,6 +172,47 @@ public class EnrollmentService {
         return result;
     }
 
+    private PagedResult<EnrollRecord> toPage(List<EnrollRecord> sourceRecords, int page, int size) {
+        int normalizedPage = Math.max(1, page);
+        int normalizedSize = Math.min(Math.max(1, size <= 0 ? DEFAULT_PAGE_SIZE : size), MAX_PAGE_SIZE);
+        int total = sourceRecords.size();
+        int fromIndex = Math.min((normalizedPage - 1) * normalizedSize, total);
+        int toIndex = Math.min(fromIndex + normalizedSize, total);
+        return new PagedResult<>(
+                sourceRecords.subList(fromIndex, toIndex),
+                normalizedPage,
+                normalizedSize,
+                total,
+                (int) Math.ceil(total / (double) normalizedSize)
+        );
+    }
+
+    private List<String> parseCsvLine(String line) {
+        List<String> fields = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char ch = line.charAt(i);
+            if (ch == '"') {
+                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                    current.append('"');
+                    i++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (ch == ',' && !quoted) {
+                fields.add(current.toString());
+                current.setLength(0);
+            } else {
+                current.append(ch);
+            }
+        }
+
+        fields.add(current.toString());
+        return fields;
+    }
+
     private boolean containsIgnoreCase(String value, String normalizedKeyword) {
         return Objects.toString(value, "").toLowerCase(Locale.ROOT).contains(normalizedKeyword);
     }
@@ -152,15 +227,23 @@ public class EnrollmentService {
 
     private String inferCourseType(String courseName) {
         String name = trim(courseName).toLowerCase(Locale.ROOT);
-        if (name.contains("java") || name.contains("数据库") || name.contains("计算机")
-                || name.contains("程序设计") || name.contains("网络")) {
+        if (containsAny(name, "java", "python", "c++", "程序设计", "数据结构", "算法", "数据库",
+                "mysql", "nosql", "计算机", "网络", "tcp/ip", "软件工程", "操作系统")) {
             return "专业课";
         }
-        if (name.contains("英语") || name.contains("思想政治") || name.contains("体育")
-                || name.contains("高等数学")) {
+        if (containsAny(name, "英语", "思想政治", "体育", "高等数学", "大学语文", "马克思", "毛概")) {
             return "公共课";
         }
         return "选修课";
+    }
+
+    private boolean containsAny(String value, String... keywords) {
+        for (String keyword : keywords) {
+            if (value.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String trim(String value) {

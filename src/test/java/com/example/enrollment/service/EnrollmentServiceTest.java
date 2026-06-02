@@ -43,4 +43,28 @@ class EnrollmentServiceTest {
         assertThat(service.search("选修课")).hasSize(1);
         assertThat(service.search("不存在")).isEmpty();
     }
+
+    @Test
+    void importFromCsvRejectsInvalidIdsAndSupportsQuotedComma() {
+        EnrollmentService service = new EnrollmentService();
+
+        ImportResult result = service.importFromCsv("""
+                S1,C000001,Java程序设计,专业课
+                S000001,C001,数据库原理,专业课
+                S000002,C000003,"计算机科学导论,A班",专业课
+                """);
+
+        assertThat(result.records()).hasSize(1);
+        assertThat(result.records().get(0).getCourseName()).isEqualTo("计算机科学导论,A班");
+        assertThat(result.errors()).hasSize(2);
+    }
+
+    @Test
+    void searchSupportsPaginationForJsonApiUse() {
+        EnrollmentService service = new EnrollmentService();
+
+        assertThat(service.search("", 1, 2).records()).hasSize(2);
+        assertThat(service.search("", 1, 2).total()).isEqualTo(5);
+        assertThat(service.search("", 1, 2).totalPages()).isEqualTo(3);
+    }
 }

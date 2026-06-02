@@ -493,13 +493,16 @@
             <section class="section">
                 <h2 class="section-title">CSV 批量导入</h2>
                 <form th:action="@{/enrollments/import}" method="post">
-                    <label for="csvText">每行一条：学生ID,课程ID,课程名称,课程类型</label>
+                    <label for="csvText">每行一条：学生ID,课程ID,课程名称,课程类型；导入会覆盖当前全量数据</label>
                     <textarea id="csvText" name="csvText" th:text="${csvText}"
                               placeholder="S000001,C000001,Java程序设计,专业课&#10;S000002,C000003,计算机网络,公共课"></textarea>
                     <div class="button-row">
                         <button type="submit">导入数据</button>
                         <a class="button-link button-secondary" th:href="@{/}">重置样例</a>
                     </div>
+                </form>
+                <form th:action="@{/enrollments/clear}" method="post" class="button-row">
+                    <button class="button-secondary" type="submit">清空数据</button>
                 </form>
 
                 <ul class="error-list" th:if="${errors != null and !#lists.isEmpty(errors)}">

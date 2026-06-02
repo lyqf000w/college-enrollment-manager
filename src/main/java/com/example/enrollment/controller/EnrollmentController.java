@@ -39,6 +39,14 @@ public class EnrollmentController {
         return "index";
     }
 
+    @PostMapping("/enrollments/clear")
+    public String clear(Model model) {
+        List<EnrollRecord> records = enrollmentService.clearRecords();
+        fillModel(model, records, "", "已清空内存中的选课记录");
+        model.addAttribute("csvText", "");
+        return "index";
+    }
+
     @GetMapping("/enrollments/search")
     public String search(@RequestParam(value = "keyword", required = false, defaultValue = "") String keyword,
                          Model model) {
